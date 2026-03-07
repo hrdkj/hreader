@@ -900,6 +900,20 @@ def clean_pdf_text(text: str, chapter_title: str = "") -> str:
     return text
 
 
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize a filename by removing or replacing invalid characters.
+    Suitable for creating safe filenames from book titles.
+    """
+    # Remove or replace characters that are problematic in filenames
+    # Replace common punctuation with underscores or remove them
+    sanitized = re.sub(r'[<>:"/\\|?*]', "", filename)  # Remove invalid chars
+    sanitized = re.sub(r"[\s]+", "_", sanitized)  # Replace spaces with underscores
+    sanitized = re.sub(r"_+", "_", sanitized)  # Collapse multiple underscores
+    sanitized = sanitized.strip("_")  # Remove leading/trailing underscores
+    return sanitized
+
+
 def find_cover_image(book_data_dir: str, book: Book) -> Optional[str]:
     """
     Find the cover image path. Tries book.cover_image first,
