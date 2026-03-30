@@ -511,7 +511,7 @@ async def delete_book(book_id: str):
         # The _data dir name maps to the source file: e.g. "Sapiens_data" -> "books/Sapiens.epub"
         base_name = safe_book_id[: -len("_data")]  # strip _data suffix
         deleted_source = False
-        for ext in (".epub", ".pdf"):
+        for ext in (".epub",):
             source_path = os.path.join("books", base_name + ext)
             if os.path.exists(source_path):
                 os.remove(source_path)

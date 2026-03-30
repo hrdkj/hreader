@@ -490,414 +490,12 @@ def export_all_to_json(directory: str = ".") -> tuple[int, int]:
     return exported, skipped
 
 
-# --- PDF Processing ---
 
 
-def process_pdf(pdf_path: str, output_dir: str) -> Book:
-    """
-    Process a PDF file into the same Book structure used for EPUBs.
-    Extracts text page-by-page and creates chapters.
-    """
-    import fitz  # PyMuPDF
 
-    print(f"Loading PDF: {pdf_path}...")
-    doc = fitz.open(pdf_path)
 
-    # 1. Extract Metadata
-    pdf_meta = doc.metadata or {}
-    title = pdf_meta.get("title") or os.path.splitext(os.path.basename(pdf_path))[0]
-    author = pdf_meta.get("author") or ""
-    authors = [a.strip() for a in author.split(",")] if author else []
 
-    metadata = BookMetadata(
-        title=title,
-        language="en",  # PDF metadata often lacks language
-        authors=authors,
-        description=pdf_meta.get("subject"),
-        publisher=pdf_meta.get("creator"),  # Often the PDF creator tool
-        date=pdf_meta.get("creationDate"),
-    )
 
-    # 2. Prepare Output Directories
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    images_dir = os.path.join(output_dir, "images")
-    os.makedirs(images_dir, exist_ok=True)
-
-    # 3. Extract cover image (first page rendered as image)
-    print("Extracting cover image...")
-    cover_image = None
-    if doc.page_count > 0:
-        first_page = doc[0]
-        # Render at 2x resolution for quality
-        mat = fitz.Matrix(2, 2)
-        pix = first_page.get_pixmap(matrix=mat)
-        cover_filename = "cover.png"
-        cover_path = os.path.join(images_dir, cover_filename)
-        pix.save(cover_path)
-        cover_image = f"images/{cover_filename}"
-        print(f"Saved cover image: {cover_path}")
-
-    # 4. Extract text and build chapters
-    # Strategy: Group pages into chapters based on TOC or fixed page count
-    print("Extracting text from PDF...")
-
-    # Try to get TOC from PDF
-    pdf_toc = doc.get_toc()  # Returns list of [level, title, page_number]
-
-    spine_chapters = []
-    toc_structure = []
-    image_map = {}
-
-    if pdf_toc and len(pdf_toc) > 0:
-        # PDF has a table of contents - use it to create chapters
-        print(f"Found PDF TOC with {len(pdf_toc)} entries")
-
-        # Build chapter ranges from TOC
-        chapter_ranges = []
-        for i, (level, title, page_num) in enumerate(pdf_toc):
-            if level == 1:  # Only use top-level entries as chapters
-                start_page = page_num - 1  # TOC uses 1-indexed pages
-                # Find end page (start of next chapter or end of doc)
-                end_page = doc.page_count
-                for j in range(i + 1, len(pdf_toc)):
-                    if pdf_toc[j][0] == 1:  # Next top-level entry
-                        end_page = pdf_toc[j][2] - 1
-                        break
-                chapter_ranges.append((title, start_page, end_page))
-
-        # If no top-level entries, fall back to all entries
-        if not chapter_ranges:
-            for i, (level, title, page_num) in enumerate(pdf_toc):
-                start_page = page_num - 1
-                end_page = doc.page_count
-                for j in range(i + 1, len(pdf_toc)):
-                    end_page = pdf_toc[j][2] - 1
-                    break
-                chapter_ranges.append((title, start_page, end_page))
-
-        # Extract text for each chapter
-        for order, (title, start_page, end_page) in enumerate(chapter_ranges):
-            chapter_text = []
-            for page_num in range(start_page, min(end_page, doc.page_count)):
-                page = doc[page_num]
-                # Use structured extraction for better results
-                text = extract_page_text_structured(page)
-                if text.strip():
-                    chapter_text.append(text)
-
-            combined_text = "\n\n".join(chapter_text)
-            if not combined_text.strip():
-                continue
-
-            # Convert plain text to simple HTML paragraphs
-            html_content = text_to_html(combined_text, chapter_title=title)
-
-            chapter = ChapterContent(
-                id=f"chapter_{order}",
-                href=f"chapter_{order}.html",
-                title=title,
-                content=html_content,
-                text=combined_text,
-                order=order,
-            )
-            spine_chapters.append(chapter)
-
-            toc_entry = TOCEntry(
-                title=title,
-                href=f"chapter_{order}.html",
-                file_href=f"chapter_{order}.html",
-                anchor="",
-            )
-            toc_structure.append(toc_entry)
-
-    else:
-        # No TOC - create chapters by grouping pages
-        print("No TOC found, grouping pages into chapters...")
-        PAGES_PER_CHAPTER = 10
-
-        total_pages = doc.page_count
-        num_chapters = (total_pages + PAGES_PER_CHAPTER - 1) // PAGES_PER_CHAPTER
-
-        for chapter_idx in range(num_chapters):
-            start_page = chapter_idx * PAGES_PER_CHAPTER
-            end_page = min(start_page + PAGES_PER_CHAPTER, total_pages)
-
-            chapter_text = []
-            for page_num in range(start_page, end_page):
-                page = doc[page_num]
-                # Use structured extraction for better results
-                text = extract_page_text_structured(page)
-                if text.strip():
-                    chapter_text.append(text)
-
-            combined_text = "\n\n".join(chapter_text)
-            if not combined_text.strip():
-                continue
-
-            title = f"Pages {start_page + 1}-{end_page}"
-
-            # Convert plain text to simple HTML paragraphs
-            html_content = text_to_html(combined_text, chapter_title=title)
-
-            chapter = ChapterContent(
-                id=f"chapter_{chapter_idx}",
-                href=f"chapter_{chapter_idx}.html",
-                title=title,
-                content=html_content,
-                text=combined_text,
-                order=chapter_idx,
-            )
-            spine_chapters.append(chapter)
-
-            toc_entry = TOCEntry(
-                title=title,
-                href=f"chapter_{chapter_idx}.html",
-                file_href=f"chapter_{chapter_idx}.html",
-                anchor="",
-            )
-            toc_structure.append(toc_entry)
-
-    doc.close()
-
-    print(f"Created {len(spine_chapters)} chapters from PDF")
-
-    # 5. Final Assembly
-    final_book = Book(
-        metadata=metadata,
-        spine=spine_chapters,
-        toc=toc_structure,
-        images=image_map,
-        source_file=os.path.basename(pdf_path),
-        processed_at=datetime.now().isoformat(),
-        cover_image=cover_image,
-    )
-
-    return final_book
-
-
-def extract_page_text_structured(page) -> str:
-    """
-    Extract text from a PDF page using block-level information
-    to better preserve structure and identify headings.
-    Handles drop caps by detecting single large letters and prepending to following text.
-    """
-    blocks = page.get_text("dict")["blocks"]
-
-    text_parts = []
-    prev_block_bottom = 0
-    pending_drop_cap = None  # Store drop cap letter to prepend to next body text block
-
-    for block in blocks:
-        if block["type"] != 0:  # Skip non-text blocks (images)
-            continue
-
-        # Get block position
-        block_top = block["bbox"][1]
-
-        # Add extra newline if there's a significant gap (new section)
-        if prev_block_bottom > 0 and (block_top - prev_block_bottom) > 30:
-            text_parts.append("\n")
-
-        # Process lines in the block
-        block_lines = []
-        block_max_font_size = 0
-        for line in block.get("lines", []):
-            line_text = ""
-            for span in line.get("spans", []):
-                span_text = span.get("text", "")
-                line_text += span_text
-                # Track max font size in this block
-                font_size = span.get("size", 0)
-                if font_size > block_max_font_size:
-                    block_max_font_size = font_size
-
-            line_text = line_text.strip()
-            if line_text:
-                block_lines.append(line_text)
-
-        if block_lines:
-            # Join lines in the same block with spaces
-            block_text = " ".join(block_lines)
-
-            # Check if this is a drop cap: single uppercase letter in large font (>30pt)
-            if (
-                len(block_text) == 1
-                and block_text.isupper()
-                and block_max_font_size > 30
-            ):
-                pending_drop_cap = block_text
-            else:
-                # If we have a pending drop cap, try to prepend it
-                if pending_drop_cap:
-                    # Only prepend to body text:
-                    # - starts with lowercase
-                    # - not a quote (doesn't start with " and doesn't end with ")
-                    # - is substantial (multiple lines OR long text)
-                    is_quote = (
-                        block_text.startswith('"')
-                        or block_text.endswith('"')
-                        or block_text.startswith("\u201c")  # left curly quote "
-                        or block_text.endswith("\u201d")  # right curly quote "
-                    )
-                    is_body_text = (
-                        block_text
-                        and block_text[0].islower()
-                        and not is_quote
-                        and (len(block_lines) > 1 or len(block_text) > 100)
-                    )
-                    if is_body_text:
-                        block_text = pending_drop_cap + block_text
-                        pending_drop_cap = None
-                    # Keep drop cap pending if this wasn't body text
-
-                text_parts.append(block_text)
-
-        prev_block_bottom = block["bbox"][3]
-
-    return "\n\n".join(text_parts)
-
-
-def text_to_html(text: str, chapter_title: str = "") -> str:
-    """
-    Convert plain text to HTML with proper paragraph structure.
-    Handles common text patterns from PDF extraction.
-    """
-    import html
-
-    # Clean up common PDF artifacts first (before escaping)
-    text = clean_pdf_text(text, chapter_title)
-
-    # Escape HTML entities
-    text = html.escape(text)
-
-    # Split into paragraphs (double newline or significant whitespace)
-    paragraphs = re.split(r"\n\s*\n", text)
-
-    # First pass: merge quote continuations
-    # Pattern: paragraph starts with " but doesn't end with " -> merge with next until we find closing "
-    merged_paragraphs = []
-    quote_buffer = None
-
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-
-        # Replace single newlines with spaces (PDF often wraps lines)
-        para = re.sub(r"\n", " ", para)
-        # Collapse multiple spaces
-        para = re.sub(r"  +", " ", para)
-
-        if not para or len(para) < 3:
-            continue
-
-        # Check quote state
-        starts_quote = para.startswith('"') or para.startswith("\u201c")
-        ends_quote = para.endswith('"') or para.endswith("\u201d")
-
-        if quote_buffer is not None:
-            # We're in a quote continuation - append to buffer
-            quote_buffer += " " + para
-            if ends_quote:
-                # Quote complete - add to merged paragraphs
-                merged_paragraphs.append(quote_buffer)
-                quote_buffer = None
-        elif starts_quote and not ends_quote:
-            # Start of a multi-paragraph quote
-            quote_buffer = para
-        else:
-            # Normal paragraph
-            merged_paragraphs.append(para)
-
-    # If quote never closed, add what we have
-    if quote_buffer is not None:
-        merged_paragraphs.append(quote_buffer)
-
-    # Second pass: convert to HTML
-    html_parts = []
-    for para in merged_paragraphs:
-        # Skip very short paragraphs that are likely artifacts
-        if len(para) < 3:
-            continue
-
-        # Detect and format section headings (numbered: "01 Title Here")
-        heading_match = re.match(r"^(\d{1,2})\s+([A-Z][^.!?]*[?!]?)$", para)
-        if heading_match and len(para) < 100:
-            num, title = heading_match.groups()
-            html_parts.append(f"<h3>{num}. {title}</h3>")
-            continue
-
-        # Detect epigraphs/quotes (text in quotes, usually short)
-        if (
-            (para.startswith('"') or para.startswith("\u201c"))
-            and (para.endswith('"') or para.endswith("\u201d"))
-            and len(para) < 500
-        ):
-            html_parts.append(f"<blockquote><p>{para}</p></blockquote>")
-            continue
-
-        html_parts.append(f"<p>{para}</p>")
-
-    return "\n".join(html_parts)
-
-
-def clean_pdf_text(text: str, chapter_title: str = "") -> str:
-    """
-    Clean up common PDF text extraction artifacts.
-    Note: Drop cap handling is done in extract_page_text_structured() during extraction.
-    """
-    # Remove common watermarks/footers
-    watermarks = [
-        r"OceanofPDF\.com",
-        r"oceanofpdf\.com",
-        r"www\.oceanofpdf\.com",
-    ]
-    for wm in watermarks:
-        text = re.sub(wm, "", text, flags=re.IGNORECASE)
-
-    # Fix lines that are just chapter numbers "01" or "1" alone
-    text = re.sub(r"^\d{1,2}\s*$", "", text, flags=re.MULTILINE)
-
-    # Merge split quotes: lines that start with lowercase and end previous line had opening quote
-    # This handles: '"First part of quote' + 'second part."'
-    lines = text.split("\n")
-    merged_lines = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        # Check if this line continues a quote from previous line
-        if (
-            i > 0
-            and merged_lines
-            and merged_lines[-1].strip().startswith('"')
-            and not merged_lines[-1].strip().endswith('"')
-            and line.strip()
-            and (line.strip()[0].islower() or line.strip().endswith('"'))
-        ):
-            # Merge with previous line
-            merged_lines[-1] = merged_lines[-1].rstrip() + " " + line.strip()
-        else:
-            merged_lines.append(line)
-        i += 1
-
-    text = "\n".join(merged_lines)
-
-    # Remove the chapter title if it appears at the very start (redundant with TOC)
-    if chapter_title:
-        # Escape special regex chars in title
-        escaped_title = re.escape(chapter_title)
-        # Remove title at start (case insensitive), possibly with "OceanofPDF" after
-        text = re.sub(
-            rf"^\s*{escaped_title}\s*\n?", "", text, count=1, flags=re.IGNORECASE
-        )
-
-    # Clean up excessive whitespace
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = text.strip()
-
-    return text
 
 
 def sanitize_filename(filename: str) -> str:
@@ -1116,10 +714,10 @@ def auto_process_books_folder(
     books_folder: str = "books", output_dir: str = "."
 ) -> tuple[int, int]:
     """
-    Automatically process EPUB and PDF files from a specific folder.
+    Automatically process EPUB files from a specific folder.
 
     Args:
-        books_folder: Folder containing EPUB/PDF files to process
+        books_folder: Folder containing EPUB files to process
         output_dir: Directory where _data folders should be created
 
     Returns:
@@ -1131,9 +729,9 @@ def auto_process_books_folder(
     processed = 0
     skipped = 0
 
-    # Find all epub and pdf files in the books folder
+    # Find all epub files in the books folder
     book_files = [
-        f for f in os.listdir(books_folder) if f.lower().endswith((".epub", ".pdf"))
+        f for f in os.listdir(books_folder) if f.lower().endswith((".epub",))
     ]
 
     if not book_files:
@@ -1159,8 +757,6 @@ def auto_process_books_folder(
         try:
             if book_file.lower().endswith(".epub"):
                 book_obj = process_epub(book_path, out_dir)
-            else:  # PDF
-                book_obj = process_pdf(book_path, out_dir)
             save_to_pickle(book_obj, out_dir)
             print(f"Done: {book_obj.metadata.title}")
             processed += 1
@@ -1462,7 +1058,6 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage:")
         print("  Process EPUB:       python reader3.py <file.epub>")
-        print("  Process PDF:        python reader3.py <file.pdf>")
         print("  Process all books:  python reader3.py --process-all")
         print("  Export to Obsidian: python reader3.py --obsidian <book_data_folder>")
         print("  Export all to Obsidian: python reader3.py --obsidian-all")
@@ -1531,15 +1126,12 @@ if __name__ == "__main__":
         success = export_to_obsidian(book_folder)
         sys.exit(0 if success else 1)
 
-    # Normal EPUB/PDF processing
+    # Normal EPUB processing
     book_file = sys.argv[1]
     assert os.path.exists(book_file), "File not found."
     out_dir = os.path.splitext(book_file)[0] + "_data"
 
-    if book_file.lower().endswith(".pdf"):
-        book_obj = process_pdf(book_file, out_dir)
-    else:
-        book_obj = process_epub(book_file, out_dir)
+    book_obj = process_epub(book_file, out_dir)
     save_to_pickle(book_obj, out_dir)
     print("\n--- Summary ---")
     print(f"Title: {book_obj.metadata.title}")
