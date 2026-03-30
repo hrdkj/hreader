@@ -190,7 +190,6 @@
             flex-grow: 1; 
             overflow-y: auto; 
             position: relative; 
-            scroll-behavior: smooth;
             background: #1a1a1a;
         }
         
@@ -2171,24 +2170,15 @@
                         const scrollTop = progress.scroll_position || 0;
                         const scrollPercentage = progress.scroll_percentage || 0;
                         
-                        // Wait for content to render
-                        await new Promise(resolve => setTimeout(resolve, 50));
-                        
                         // Try pixel-based first
                         if (scrollTop > 0) {
-                            this.scrollContainer.scrollTo({
-                                top: scrollTop,
-                                behavior: 'smooth'
-                            });
+                            this.scrollContainer.scrollTop = scrollTop;
                         } else if (scrollPercentage > 0) {
                             // Fallback to percentage-based
                             const scrollHeight = this.scrollContainer.scrollHeight;
                             const clientHeight = this.scrollContainer.clientHeight;
                             const maxScroll = scrollHeight - clientHeight;
-                            this.scrollContainer.scrollTo({
-                                top: maxScroll * scrollPercentage,
-                                behavior: 'smooth'
-                            });
+                            this.scrollContainer.scrollTop = maxScroll * scrollPercentage;
                         }
                     }
                 } catch (error) {
