@@ -33,6 +33,8 @@
             flex-shrink: 0;
             transition: width 0.3s ease, padding 0.3s ease, transform 0.3s ease;
             z-index: 100;
+            -webkit-user-select: none;
+            user-select: none;
         }
 
         #sidebar.collapsed {
@@ -251,6 +253,8 @@
             border-top: 1px solid #333; 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             gap: 16px;
+            -webkit-user-select: none;
+            user-select: none;
         }
         
         .nav-btn { 
@@ -349,6 +353,8 @@
             gap: 14px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             z-index: 1001;
+            -webkit-user-select: none;
+            user-select: none;
         }
         #audio-player.visible { display: flex; }
         body.has-audio-player #main { padding-bottom: 64px; }
